@@ -439,6 +439,7 @@ function CopyLeaderboardActions({
               variant="outline"
               size="icon"
               aria-label="Copy leaderboard as TSV"
+              className="active:!translate-y-0"
               onClick={copyTable}
             >
               <HugeiconsIcon
@@ -446,7 +447,11 @@ function CopyLeaderboardActions({
                   tableCopyState === 'copied' ? Tick02Icon : Copy01Icon
                 }
                 strokeWidth={2}
-                className="text-muted-foreground"
+                className={cn(
+                  tableCopyState === 'copied'
+                    ? 'text-[#038f99]'
+                    : 'text-muted-foreground',
+                )}
               />
             </Button>
           }
@@ -467,6 +472,7 @@ function CopyLeaderboardActions({
               variant="outline"
               size="icon"
               aria-label="Copy leaderboard as PNG"
+              className="active:!translate-y-0"
               onClick={copyTableImage}
             >
               <HugeiconsIcon
@@ -474,7 +480,11 @@ function CopyLeaderboardActions({
                   imageCopyState === 'copied' ? Tick02Icon : Image01Icon
                 }
                 strokeWidth={2}
-                className="text-muted-foreground"
+                className={cn(
+                  imageCopyState === 'copied'
+                    ? 'text-[#038f99]'
+                    : 'text-muted-foreground',
+                )}
               />
             </Button>
           }

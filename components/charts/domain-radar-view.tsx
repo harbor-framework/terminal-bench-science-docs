@@ -8,21 +8,15 @@ import {
 import { HugeiconsIcon } from '@hugeicons/react';
 import { useQuery } from '@tanstack/react-query';
 import { toBlob } from 'html-to-image';
-import { parseAsStringLiteral, useQueryState } from 'nuqs';
+import { useQueryState } from 'nuqs';
 import { useMemo, useState } from 'react';
 
 import {
-  DEFAULT_PARETO_X,
-  DEFAULT_PARETO_Y,
-  PARETO_AXES,
-  PARETO_X_AXIS_IDS,
-  isParetoXAxisId,
-} from '@/components/charts/pareto-axes';
-import {
-  ParetoScatterChart,
-  buildParetoData,
-  type ParetoDatum,
-} from '@/components/charts/pareto-scatter-chart';
+  DOMAIN_AXES,
+  DomainRadarChart,
+  buildDomainRadarData,
+  type DomainRadarDatum,
+} from '@/components/charts/domain-radar-chart';
 import {
   applyLeaderboardFilters,
   buildFilterFacets,
@@ -30,13 +24,6 @@ import {
   type LeaderboardFilters,
 } from '@/components/leaderboard/leaderboard-toolbar';
 import { Button } from '@/components/ui/button';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import {
   Tooltip,
   TooltipContent,
@@ -46,7 +33,6 @@ import {
   TERMINAL_BENCH_LEADERBOARD,
   TERMINAL_BENCH_PACKAGE,
   fetchLeaderboard,
-  formatLeaderboardCell,
   leaderboardQueryKey,
 } from '@/lib/leaderboard';
 import {
@@ -56,9 +42,7 @@ import {
 } from '@/lib/leaderboard-url-state';
 import { cn } from '@/lib/utils';
 
-const parseParetoXAxis = parseAsStringLiteral(PARETO_X_AXIS_IDS);
-const PARETO_IMAGE_ID = 'pareto-chart-image';
-const Z_95 = 1.96;
+const DOMAIN_RADAR_IMAGE_ID = 'domain-radar-chart-image';
 const SVG_CAPTURE_PROPERTIES = [
   'color',
   'fill',
@@ -80,7 +64,7 @@ function resolveCaptureColor(value: string, context: CanvasRenderingContext2D): 
     : context.fillStyle;
 }
 
-function inlineParetoSvgStyles(
+function inlineDomainRadarSvgStyles(
   chart: HTMLElement,
 ): { backgroundColor?: string; restore: () => void } {
   const svg = chart.querySelector('svg');
@@ -90,7 +74,6 @@ function inlineParetoSvgStyles(
   const cardBackground = chart.parentElement
     ? window.getComputedStyle(chart.parentElement).backgroundColor
     : undefined;
-
   const elements = [svg, ...svg.querySelectorAll<SVGElement>('*')];
   const originalStyles = elements.map((element) => ({
     element,
@@ -116,69 +99,23 @@ function inlineParetoSvgStyles(
       : cardBackground,
     restore: () => {
       for (const { element, style } of originalStyles) {
-        if (style == null) {
-          element.removeAttribute('style');
-        } else {
-          element.setAttribute('style', style);
-        }
+        if (style == null) element.removeAttribute('style');
+        else element.setAttribute('style', style);
       }
     },
   };
 }
 
-function paretoAxisHeader(axisId: keyof typeof PARETO_AXES): string {
-  switch (axisId) {
-    case 'accuracy':
-      return 'Resolution Rate (%)';
-    case 'cost':
-      return 'Cost (USD)';
-    case 'tokens':
-      return 'Tokens';
-    case 'release_date':
-      return 'Release Date';
-  }
-}
-
-function paretoValueForExport(
-  value: number,
-  axisId: keyof typeof PARETO_AXES,
-): string {
-  if (axisId === 'release_date') {
-    return new Date(value).toISOString().slice(0, 10);
-  }
-  return formatLeaderboardCell(value, 'number');
-}
-
-function formatConfidenceInterval(point: ParetoDatum): string {
-  if (point.accuracyStderr == null) return '—';
-  return (Z_95 * point.accuracyStderr).toFixed(2);
-}
-
-function paretoDataToTsv(
-  data: ParetoDatum[],
-  xAxisId: keyof typeof PARETO_AXES,
-  yAxisId: keyof typeof PARETO_AXES,
-): string {
-  const header = [
-    'Model',
-    'Agent',
-    paretoAxisHeader(yAxisId),
-    ...(yAxisId === 'accuracy' ? ['95% CI (± pp)'] : []),
-    paretoAxisHeader(xAxisId),
-    'Pareto Frontier',
-  ];
-  const rows = data.map((point) => [
-    point.label.model,
-    point.label.agent,
-    paretoValueForExport(point.y, yAxisId),
-    ...(yAxisId === 'accuracy' ? [formatConfidenceInterval(point)] : []),
-    paretoValueForExport(point.x, xAxisId),
-    point.onFrontier ? 'Yes' : 'No',
+function domainDataToTsv(data: DomainRadarDatum[]): string {
+  const header = ['Model', 'Agent', ...DOMAIN_AXES.map((axis) => axis.label)];
+  const rows = data.map((datum) => [
+    datum.label.model,
+    datum.label.agent,
+    ...DOMAIN_AXES.map((axis) => String(datum.scores[axis.id])),
   ]);
-  const curveTitle = `${PARETO_AXES[yAxisId].label} vs. ${PARETO_AXES[xAxisId].label}`;
 
   return [
-    [`Terminal-Bench Science 0.1 Pareto Data (${curveTitle})`],
+    ['Terminal-Bench Science 0.1 Domain Radar Data'],
     [],
     header,
     ...rows,
@@ -187,15 +124,7 @@ function paretoDataToTsv(
     .join('\n');
 }
 
-function CopyParetoActions({
-  data,
-  xAxisId,
-  yAxisId,
-}: {
-  data: ParetoDatum[];
-  xAxisId: keyof typeof PARETO_AXES;
-  yAxisId: keyof typeof PARETO_AXES;
-}) {
+function CopyDomainRadarActions({ data }: { data: DomainRadarDatum[] }) {
   const [tableCopyState, setTableCopyState] = useState<
     'idle' | 'copied' | 'error'
   >('idle');
@@ -205,9 +134,7 @@ function CopyParetoActions({
 
   async function copyData() {
     try {
-      await navigator.clipboard.writeText(
-        paretoDataToTsv(data, xAxisId, yAxisId),
-      );
+      await navigator.clipboard.writeText(domainDataToTsv(data));
       setTableCopyState('copied');
     } catch {
       setTableCopyState('error');
@@ -216,7 +143,7 @@ function CopyParetoActions({
   }
 
   async function copyChartImage() {
-    const chart = document.getElementById(PARETO_IMAGE_ID);
+    const chart = document.getElementById(DOMAIN_RADAR_IMAGE_ID);
     if (
       !chart ||
       !navigator.clipboard?.write ||
@@ -227,15 +154,14 @@ function CopyParetoActions({
       return;
     }
 
-    const { backgroundColor, restore: restoreSvgStyles } =
-      inlineParetoSvgStyles(chart);
+    const { backgroundColor, restore } = inlineDomainRadarSvgStyles(chart);
     try {
       const image = await toBlob(chart, {
         backgroundColor,
         cacheBust: true,
         pixelRatio: 1,
       });
-      if (!image) throw new Error('Could not create Pareto chart image.');
+      if (!image) throw new Error('Could not create domain radar image.');
       await navigator.clipboard.write([
         new ClipboardItem({ 'image/png': image }),
       ]);
@@ -243,7 +169,7 @@ function CopyParetoActions({
     } catch {
       setImageCopyState('error');
     } finally {
-      restoreSvgStyles();
+      restore();
     }
     window.setTimeout(() => setImageCopyState('idle'), 1600);
   }
@@ -257,7 +183,7 @@ function CopyParetoActions({
               type="button"
               variant="outline"
               size="icon"
-              aria-label="Copy Pareto data as TSV"
+              aria-label="Copy domain radar data as TSV"
               className="active:!translate-y-0"
               onClick={copyData}
             >
@@ -278,7 +204,7 @@ function CopyParetoActions({
             ? 'Copied as TSV'
             : tableCopyState === 'error'
               ? 'Could not copy TSV'
-              : 'Copy Pareto data as TSV'}
+              : 'Copy domain radar data as TSV'}
         </TooltipContent>
       </Tooltip>
       <Tooltip>
@@ -288,7 +214,7 @@ function CopyParetoActions({
               type="button"
               variant="outline"
               size="icon"
-              aria-label="Copy Pareto chart as PNG"
+              aria-label="Copy domain radar chart as PNG"
               className="active:!translate-y-0"
               onClick={copyChartImage}
             >
@@ -309,21 +235,14 @@ function CopyParetoActions({
             ? 'Copied as PNG'
             : imageCopyState === 'error'
               ? 'Could not copy PNG'
-              : 'Copy Pareto chart as PNG'}
+              : 'Copy domain radar chart as PNG'}
         </TooltipContent>
       </Tooltip>
     </div>
   );
 }
 
-export function ParetoView() {
-  const [xAxisId, setXAxisId] = useQueryState(
-    'x',
-    parseParetoXAxis.withDefault(DEFAULT_PARETO_X),
-  );
-
-  const yAxisId = DEFAULT_PARETO_Y;
-
+export function DomainRadarView() {
   const { data, error, isPending } = useQuery({
     queryKey: leaderboardQueryKey(
       TERMINAL_BENCH_PACKAGE,
@@ -332,14 +251,9 @@ export function ParetoView() {
     queryFn: () =>
       fetchLeaderboard(TERMINAL_BENCH_PACKAGE, TERMINAL_BENCH_LEADERBOARD),
   });
-
   const facets = useMemo(() => {
     if (!data) {
-      return {
-        numberBounds: {},
-        dateBounds: {},
-        setOptions: {},
-      };
+      return { numberBounds: {}, dateBounds: {}, setOptions: {} };
     }
     return buildFilterFacets(data.leaderboard.columns, data.rows);
   }, [data]);
@@ -360,37 +274,36 @@ export function ParetoView() {
       facets.numberBounds,
     );
   }, [data, facets.numberBounds, filters]);
+  const chartData = useMemo(
+    () => buildDomainRadarData(filteredRows),
+    [filteredRows],
+  );
+
   function handleFiltersChange(next: LeaderboardFilters) {
     void setUrlFilters(toUrlFilters(next, facets.numberBounds));
   }
 
-  const chartData = useMemo(
-    () => buildParetoData(filteredRows, xAxisId, yAxisId),
-    [filteredRows, xAxisId, yAxisId],
+  const toolbar = (
+    <LeaderboardToolbar
+      columns={data?.leaderboard.columns ?? []}
+      columnOptions={[]}
+      filters={filters}
+      onFiltersChange={handleFiltersChange}
+      numberBounds={facets.numberBounds}
+      dateBounds={facets.dateBounds}
+      setOptions={facets.setOptions}
+      columnVisibility={{}}
+      onColumnVisibilityChange={() => {}}
+      showColumnControls={false}
+    />
   );
-
-  const xLabel = PARETO_AXES[xAxisId].label;
-  const yLabel = PARETO_AXES[yAxisId].label;
 
   if (isPending) {
     return (
       <div className="flex w-full min-w-0 flex-col gap-1.5">
-        <div className="flex items-center justify-end">
-          <LeaderboardToolbar
-            columns={[]}
-            columnOptions={[]}
-            filters={filters}
-            onFiltersChange={handleFiltersChange}
-            numberBounds={facets.numberBounds}
-            dateBounds={facets.dateBounds}
-            setOptions={facets.setOptions}
-            columnVisibility={{}}
-            onColumnVisibilityChange={() => {}}
-            showColumnControls={false}
-          />
-        </div>
+        <div className="flex items-center justify-end">{toolbar}</div>
         <div className="-mx-4 rounded-none border border-x-0 px-4 py-10 text-center text-sm text-muted-foreground md:mx-0 md:rounded-xl md:border-x">
-          Loading Pareto…
+          Loading domains…
         </div>
       </div>
     );
@@ -399,22 +312,9 @@ export function ParetoView() {
   if (error || !data) {
     return (
       <div className="flex w-full min-w-0 flex-col gap-1.5">
-        <div className="flex items-center justify-end">
-          <LeaderboardToolbar
-            columns={[]}
-            columnOptions={[]}
-            filters={filters}
-            onFiltersChange={handleFiltersChange}
-            numberBounds={facets.numberBounds}
-            dateBounds={facets.dateBounds}
-            setOptions={facets.setOptions}
-            columnVisibility={{}}
-            onColumnVisibilityChange={() => {}}
-            showColumnControls={false}
-          />
-        </div>
+        <div className="flex items-center justify-end">{toolbar}</div>
         <div className="-mx-4 rounded-none border border-x-0 border-destructive/30 bg-destructive/5 px-4 py-10 text-center text-sm text-destructive md:mx-0 md:rounded-xl md:border-x">
-          {error?.message ?? 'Failed to load Pareto data'}
+          {error?.message ?? 'Failed to load domain data'}
         </div>
       </div>
     );
@@ -423,55 +323,18 @@ export function ParetoView() {
   return (
     <div className="flex w-full min-w-0 flex-col gap-1.5">
       <div className="flex items-center gap-1.5">
-        <CopyParetoActions
-          data={chartData}
-          xAxisId={xAxisId}
-          yAxisId={yAxisId}
-        />
-        <LeaderboardToolbar
-          columns={data.leaderboard.columns}
-          columnOptions={[]}
-          filters={filters}
-          onFiltersChange={handleFiltersChange}
-          numberBounds={facets.numberBounds}
-          dateBounds={facets.dateBounds}
-          setOptions={facets.setOptions}
-          columnVisibility={{}}
-          onColumnVisibilityChange={() => {}}
-          showColumnControls={false}
-        />
+        <CopyDomainRadarActions data={chartData} />
+        {toolbar}
       </div>
       <div className="-mx-4 min-w-0 overflow-hidden rounded-none border border-x-0 bg-card md:mx-0 md:rounded-xl md:border-x">
-        <div className="flex flex-wrap items-center gap-2 border-b px-4 py-3 uppercase">
-          <span className="text-sm text-muted-foreground">{yLabel} vs</span>
-          <Select
-            value={xAxisId}
-            onValueChange={(next) => {
-              if (typeof next === 'string' && isParetoXAxisId(next)) {
-                void setXAxisId(next);
-              }
-            }}
-          >
-            <SelectTrigger
-              size="sm"
-              className="min-w-36 bg-background uppercase dark:bg-card"
-            >
-              <SelectValue>{xLabel}</SelectValue>
-            </SelectTrigger>
-            <SelectContent align="start">
-              {PARETO_X_AXIS_IDS.map((axisId) => (
-                <SelectItem key={axisId} value={axisId} className="uppercase">
-                  {PARETO_AXES[axisId].label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+        <div className="border-b px-4 py-3">
+          <p className="text-sm uppercase text-muted-foreground">
+            Domain profiles
+          </p>
         </div>
-        <ParetoScatterChart
+        <DomainRadarChart
+          id={DOMAIN_RADAR_IMAGE_ID}
           data={chartData}
-          xAxisId={xAxisId}
-          yAxisId={yAxisId}
-          id={PARETO_IMAGE_ID}
           className="px-2 py-3"
         />
       </div>

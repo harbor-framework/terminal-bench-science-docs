@@ -273,6 +273,8 @@ type LeaderboardToolbarProps = {
   setOptions: SetOptions;
   columnVisibility: VisibilityState;
   onColumnVisibilityChange: OnChangeFn<VisibilityState>;
+  showColumnControls?: boolean;
+  showViewToggle?: boolean;
 };
 
 export function LeaderboardToolbar({
@@ -285,6 +287,8 @@ export function LeaderboardToolbar({
   setOptions,
   columnVisibility,
   onColumnVisibilityChange,
+  showColumnControls = true,
+  showViewToggle = true,
 }: LeaderboardToolbarProps) {
   const activeFilterCount = countActiveFilters(filters, numberBounds);
 
@@ -439,7 +443,7 @@ export function LeaderboardToolbar({
       <div className="flex shrink-0 items-center gap-1.5">
         {/* Mobile: drawers below sm */}
         <div className="flex items-center gap-1.5 sm:hidden">
-          <Drawer showSwipeHandle>
+          {showColumnControls ? <Drawer showSwipeHandle>
             <DrawerTrigger
               render={
                 <Button
@@ -571,7 +575,7 @@ export function LeaderboardToolbar({
                 </DrawerFooter>
               ) : null}
             </DrawerContent>
-          </Drawer>
+          </Drawer> : null}
 
           <Drawer showSwipeHandle>
             <DrawerTrigger
@@ -817,7 +821,7 @@ export function LeaderboardToolbar({
             </DropdownMenuContent>
           </DropdownMenu>
 
-          <Popover>
+          {showColumnControls ? <Popover>
             <PopoverTrigger
               render={
                 <Button
@@ -867,10 +871,10 @@ export function LeaderboardToolbar({
                 </ScrollArea>
               </Command>
             </PopoverContent>
-          </Popover>
+          </Popover> : null}
         </div>
 
-        <HomeViewToggle />
+        {showViewToggle ? <HomeViewToggle /> : null}
       </div>
     </div>
   );

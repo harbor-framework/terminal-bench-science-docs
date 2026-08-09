@@ -3,6 +3,7 @@
 import { useQueryState } from 'nuqs';
 import type { ReactNode } from 'react';
 
+import { DomainRadarView } from '@/components/charts/domain-radar-view';
 import { ParetoView } from '@/components/charts/pareto-view';
 import {
   parseHomeView,
@@ -26,6 +27,8 @@ function ViewContent({
       return leaderboard;
     case 'pareto':
       return <ParetoView />;
+    case 'domains':
+      return <DomainRadarView />;
     default: {
       const _exhaustive: never = view;
       return _exhaustive;
