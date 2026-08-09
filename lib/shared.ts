@@ -1,0 +1,11 @@
+export const appName = 'TERMINAL-BENCH SCIENCE 0.1';
+export const docsRoute = '/docs';
+export const docsImageRoute = '/og/docs';
+export const docsContentRoute = '/llms.mdx/docs';
+
+// fill this with your actual GitHub info, for example:
+export const gitConfig = {
+  user: 'harbor-framework',
+  repo: 'terminal-bench-science',
+  branch: 'main',
+};

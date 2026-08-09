@@ -1,0 +1,476 @@
+'use client';
+
+import {
+  ArrowDown01Icon,
+  ArrowUp01Icon,
+  ArrowUpDownIcon,
+} from '@hugeicons/core-free-icons';
+import { HugeiconsIcon } from '@hugeicons/react';
+import { useQuery } from '@tanstack/react-query';
+import type {
+  Column,
+  ColumnDef,
+  OnChangeFn,
+  VisibilityState,
+} from '@tanstack/react-table';
+import { useQueryState } from 'nuqs';
+import { useMemo } from 'react';
+
+import { LeaderboardSkeleton } from '@/components/leaderboard/leaderboard-skeleton';
+import {
+  applyLeaderboardFilters,
+  buildFilterFacets,
+  LeaderboardToolbar,
+  type LeaderboardFilters,
+} from '@/components/leaderboard/leaderboard-toolbar';
+import { DataTable } from '@/components/ui/data-table';
+import {
+  TERMINAL_BENCH_LEADERBOARD,
+  TERMINAL_BENCH_PACKAGE,
+  fetchLeaderboard,
+  formatLeaderboardCell,
+  getAccessorValue,
+  harborLeaderboardRowUrl,
+  leaderboardQueryKey,
+  parseLeaderboardLink,
+  type LeaderboardColumn,
+  type LeaderboardColumnType,
+  type LeaderboardRow,
+} from '@/lib/leaderboard';
+import {
+  fromUrlFilters,
+  hiddenColumnsParser,
+  leaderboardFiltersParser,
+  toUrlFilters,
+} from '@/lib/leaderboard-url-state';
+import { cn } from '@/lib/utils';
+
+const SORTABLE_COLUMN_IDS = new Set([
+  'accuracy',
+  'release_date',
+  'total_tokens',
+  'total_cost_usd',
+]);
+
+function alignClass(align?: LeaderboardColumn['align']) {
+  switch (align) {
+    case 'center':
+      return 'text-center';
+    case 'right':
+      return 'text-right';
+    case 'left':
+    case undefined:
+      return 'text-left';
+    default: {
+      const _exhaustive: never = align;
+      return _exhaustive;
+    }
+  }
+}
+
+function renderMarkdownInline(text: string) {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, index) => {
+    const match = /^\*\*([^*]+)\*\*$/.exec(part);
+    if (match) {
+      return <strong key={index}>{match[1]}</strong>;
+    }
+    return <span key={index}>{part}</span>;
+  });
+}
+
+function LeaderboardCell({
+  value,
+  type,
+}: {
+  value: unknown;
+  type: LeaderboardColumnType;
+}) {
+  if (value == null || value === '') return '—';
+
+  switch (type) {
+    case 'link': {
+      const link = parseLeaderboardLink(value);
+      if (!link) return formatLeaderboardCell(value, type);
+      return (
+        <a
+          href={link.url}
+          target="_blank"
+          rel="noreferrer"
+          className="hover:underline"
+          onClick={(event) => event.stopPropagation()}
+        >
+          {link.label}
+        </a>
+      );
+    }
+    case 'markdown':
+      return <>{renderMarkdownInline(String(value))}</>;
+    case 'boolean':
+    case 'number':
+    case 'date':
+    case 'text':
+      return formatLeaderboardCell(value, type);
+    default: {
+      const _exhaustive: never = type;
+      return String(_exhaustive);
+    }
+  }
+}
+
+const Z_95 = 1.96;
+
+function AccuracyBarCell({ row }: { row: LeaderboardRow }) {
+  const accuracy = getAccessorValue(row, 'metrics.accuracy');
+  const stderr = getAccessorValue(row, 'metrics.accuracy_stderr');
+  const display = getAccessorValue(row, 'metrics.display_accuracy');
+
+  const value =
+    typeof accuracy === 'number' && !Number.isNaN(accuracy) ? accuracy : null;
+  const se =
+    typeof stderr === 'number' && !Number.isNaN(stderr) ? stderr : 0;
+  const half = Z_95 * se;
+  const ciUpper = value != null ? Math.min(100, value + half) : 0;
+  const ciWidth = value != null ? Math.max(0, ciUpper - value) : 0;
+
+  if (value == null) {
+    return (
+      <LeaderboardCell value={display ?? accuracy} type="markdown" />
+    );
+  }
+
+  return (
+    <div className="flex min-w-52 items-center gap-3">
+      <div className="w-28 shrink-0 tabular-nums">
+        <LeaderboardCell value={display ?? accuracy} type="markdown" />
+      </div>
+      <div className="relative h-3 min-w-0 flex-1 overflow-hidden rounded-none bg-muted">
+        <div
+          className="absolute inset-y-0 left-0 rounded-none bg-foreground/80"
+          style={{ width: `${Math.min(100, Math.max(0, value))}%` }}
+        />
+        {ciWidth > 0 ? (
+          <div
+            className="absolute inset-y-0 rounded-none bg-foreground/15"
+            style={{
+              left: `${Math.min(100, Math.max(0, value))}%`,
+              width: `${ciWidth}%`,
+            }}
+          />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function SortableHeader({
+  column,
+  label,
+  align,
+}: {
+  column: Column<LeaderboardRow, unknown>;
+  label: string;
+  align?: LeaderboardColumn['align'];
+}) {
+  const sorted = column.getIsSorted();
+  const icon =
+    sorted === 'asc'
+      ? ArrowUp01Icon
+      : sorted === 'desc'
+        ? ArrowDown01Icon
+        : ArrowUpDownIcon;
+
+  return (
+    <button
+      type="button"
+      className={cn(
+        'inline-flex items-center gap-1.5 font-medium uppercase hover:text-foreground',
+        align === 'right' && 'ml-auto',
+        align === 'center' && 'mx-auto',
+      )}
+      onClick={() => column.toggleSorting(sorted === 'asc')}
+    >
+      <span>{label}</span>
+      <HugeiconsIcon
+        icon={icon}
+        strokeWidth={2}
+        className={cn(
+          'size-3.5',
+          sorted ? 'text-[#038f99]' : 'text-muted-foreground',
+        )}
+      />
+    </button>
+  );
+}
+
+const HIDDEN_TABLE_COLUMN_IDS = new Set(['reasoning_effort']);
+
+function displayColumnHeader(column: LeaderboardColumn): string {
+  const label = column.id === 'accuracy' ? 'Resolution Rate' : column.header;
+  return label.toUpperCase();
+}
+
+/** Prefer Model before Agent until Hub column order is updated. */
+function orderLeaderboardColumns(
+  columns: LeaderboardColumn[],
+): LeaderboardColumn[] {
+  const byId = new Map(columns.map((column) => [column.id, column]));
+  if (!byId.has('agent_display') || !byId.has('model_display')) {
+    return columns;
+  }
+
+  const ordered: LeaderboardColumn[] = [];
+  let emittedPair = false;
+  for (const column of columns) {
+    if (
+      column.id === 'agent_display' ||
+      column.id === 'model_display'
+    ) {
+      if (emittedPair) continue;
+      emittedPair = true;
+      const model = byId.get('model_display');
+      const agent = byId.get('agent_display');
+      if (model) ordered.push(model);
+      if (agent) ordered.push(agent);
+      continue;
+    }
+    ordered.push(column);
+  }
+  return ordered;
+}
+
+function buildColumns(
+  columns: LeaderboardColumn[],
+): ColumnDef<LeaderboardRow>[] {
+  const rankColumn: ColumnDef<LeaderboardRow> = {
+    id: 'rank',
+    header: 'RANK',
+    accessorFn: (row) => row.rank,
+    cell: ({ row }) => (
+      <span className="tabular-nums text-muted-foreground">
+        {row.original.rank ?? '—'}
+      </span>
+    ),
+    enableSorting: false,
+    meta: {
+      headerClassName: 'w-12 text-center',
+      cellClassName: 'text-center',
+    },
+  };
+
+  const dataColumns = orderLeaderboardColumns(columns)
+    .filter((column) => !HIDDEN_TABLE_COLUMN_IDS.has(column.id))
+    .map((column): ColumnDef<LeaderboardRow> => {
+      const displayType = column.display_type ?? column.type;
+      const columnAlign =
+        column.id === 'accuracy' ? 'left' : column.align;
+      const align = alignClass(columnAlign);
+      const sortable = SORTABLE_COLUMN_IDS.has(column.id);
+      const headerLabel = displayColumnHeader(column);
+      return {
+        id: column.id,
+        accessorFn: (row) => getAccessorValue(row, column.accessor),
+        header: sortable
+          ? ({ column: tableColumn }) => (
+              <SortableHeader
+                column={tableColumn}
+                label={headerLabel}
+                align={columnAlign}
+              />
+            )
+          : headerLabel,
+        cell: ({ row }) => {
+          const value = column.display_accessor
+            ? getAccessorValue(row.original, column.display_accessor)
+            : getAccessorValue(row.original, column.accessor);
+
+          if (column.id === 'model_display') {
+            const effort = getAccessorValue(
+              row.original,
+              'metadata.reasoning_effort',
+            );
+            const effortLabel =
+              typeof effort === 'string' && effort.trim()
+                ? effort.trim()
+                : null;
+            return (
+              <span className="inline-flex items-baseline gap-1">
+                <LeaderboardCell value={value} type={displayType} />
+                {effortLabel ? (
+                  <span className="text-xs text-muted-foreground">
+                    ({effortLabel})
+                  </span>
+                ) : null}
+              </span>
+            );
+          }
+
+          if (column.id === 'accuracy') {
+            return <AccuracyBarCell row={row.original} />;
+          }
+
+          return <LeaderboardCell value={value} type={displayType} />;
+        },
+        enableSorting: sortable,
+        meta: {
+          headerClassName: align,
+          cellClassName: cn(
+            align,
+            column.type === 'number' && 'tabular-nums',
+            column.id === 'accuracy' && 'min-w-56',
+          ),
+        },
+      };
+    });
+
+  return [rankColumn, ...dataColumns];
+}
+
+export function LeaderboardTable() {
+  const { data, error, isPending } = useQuery({
+    queryKey: leaderboardQueryKey(
+      TERMINAL_BENCH_PACKAGE,
+      TERMINAL_BENCH_LEADERBOARD,
+    ),
+    queryFn: () =>
+      fetchLeaderboard(TERMINAL_BENCH_PACKAGE, TERMINAL_BENCH_LEADERBOARD),
+  });
+
+  const facets = useMemo(() => {
+    if (!data) {
+      return {
+        numberBounds: {},
+        dateBounds: {},
+        setOptions: {},
+      };
+    }
+    return buildFilterFacets(data.leaderboard.columns, data.rows);
+  }, [data]);
+
+  const [urlFilters, setUrlFilters] = useQueryState(
+    'filters',
+    leaderboardFiltersParser,
+  );
+  const [hiddenColumns, setHiddenColumns] = useQueryState(
+    'hide',
+    hiddenColumnsParser,
+  );
+
+  const filters = useMemo(
+    () => fromUrlFilters(urlFilters, facets.numberBounds),
+    [facets.numberBounds, urlFilters],
+  );
+
+  const columnVisibility = useMemo(() => {
+    const visibility: VisibilityState = {};
+    for (const id of hiddenColumns) {
+      visibility[id] = false;
+    }
+    return visibility;
+  }, [hiddenColumns]);
+
+  function handleFiltersChange(next: LeaderboardFilters) {
+    void setUrlFilters(toUrlFilters(next, facets.numberBounds));
+  }
+
+  const handleColumnVisibilityChange: OnChangeFn<VisibilityState> = (
+    updater,
+  ) => {
+    const next =
+      typeof updater === 'function' ? updater(columnVisibility) : updater;
+    const hidden = Object.entries(next)
+      .filter(([, visible]) => visible === false)
+      .map(([id]) => id);
+    // Persist [] when everything is visible so defaults don't snap back on.
+    void setHiddenColumns(hidden);
+  };
+
+  const filteredRows = useMemo(() => {
+    if (!data) return [];
+    return applyLeaderboardFilters(
+      data.rows,
+      data.leaderboard.columns,
+      filters,
+      facets.numberBounds,
+    );
+  }, [data, facets.numberBounds, filters]);
+
+  const tableColumns = useMemo(
+    () => (data ? buildColumns(data.leaderboard.columns) : []),
+    [data],
+  );
+
+  const columnOptions = useMemo(() => {
+    if (!data) return [];
+    return [
+      { id: 'rank', label: 'RANK', canHide: true },
+      ...orderLeaderboardColumns(data.leaderboard.columns)
+        .filter((column) => !HIDDEN_TABLE_COLUMN_IDS.has(column.id))
+        .map((column) => ({
+          id: column.id,
+          label: displayColumnHeader(column),
+          canHide: true,
+        })),
+    ];
+  }, [data]);
+
+  const toolbarColumns = useMemo(() => {
+    if (!data) return [];
+    return data.leaderboard.columns.map((column) => ({
+      ...column,
+      header: displayColumnHeader(column),
+    }));
+  }, [data]);
+
+  if (isPending) {
+    return <LeaderboardSkeleton />;
+  }
+
+  if (error || !data) {
+    return (
+      <div className="-mx-4 rounded-none border border-x-0 border-destructive/30 bg-destructive/5 px-4 py-10 text-center text-sm text-destructive md:mx-0 md:rounded-xl md:border-x">
+        {error?.message ?? 'Failed to load leaderboard'}
+      </div>
+    );
+  }
+
+  return (
+    <div className="w-full min-w-0 text-left">
+      <DataTable
+        columns={tableColumns}
+        data={filteredRows}
+        emptyMessage="No leaderboard rows match the current filters."
+        getRowId={(row) => row.id}
+        getRowHref={(row) =>
+          harborLeaderboardRowUrl(
+            TERMINAL_BENCH_PACKAGE,
+            TERMINAL_BENCH_LEADERBOARD,
+            row.id,
+          )
+        }
+        columnVisibility={columnVisibility}
+        onColumnVisibilityChange={handleColumnVisibilityChange}
+        toolbar={
+          <LeaderboardToolbar
+            columns={toolbarColumns}
+            columnOptions={columnOptions}
+            filters={filters}
+            onFiltersChange={handleFiltersChange}
+            numberBounds={facets.numberBounds}
+            dateBounds={facets.dateBounds}
+            setOptions={facets.setOptions}
+            columnVisibility={columnVisibility}
+            onColumnVisibilityChange={handleColumnVisibilityChange}
+          />
+        }
+        footer={
+          <footer className="flex h-12 items-center justify-center border-t px-6 text-center text-sm text-muted-foreground">
+            Resolution rate of Terminal-Bench Science 0.1 tasks, ranked by agent
+            and model
+            performance.
+          </footer>
+        }
+      />
+    </div>
+  );
+}

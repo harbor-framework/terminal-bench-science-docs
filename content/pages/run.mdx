@@ -1,0 +1,72 @@
+---
+title: Run Terminal-Bench Science
+description: Run scientific workflow tasks with Terminal-Bench Science.
+---
+
+## Install Harbor
+
+Terminal-Bench Science runs in [Harbor](https://www.harborframework.com).
+
+<Tabs items={['uv', 'pip']}>
+  <Tab value="uv">
+
+```bash
+uv tool install 'harbor[modal]'
+```
+
+  </Tab>
+  <Tab value="pip">
+
+```bash
+pip install 'harbor[modal]'
+```
+
+  </Tab>
+</Tabs>
+
+## Clone the benchmark
+
+```bash
+git clone https://github.com/harbor-framework/terminal-bench-science.git
+cd terminal-bench-science
+```
+
+## Run a scientific workflow task
+
+Tasks cover life sciences, physical sciences, earth sciences, mathematical sciences, and engineering sciences. Run an individual task by its domain, field, and task name.
+
+```bash
+harbor run -p tasks/<task-domain>/<task-field>/<task-name> \
+  -a <agent> \
+  -m <provider/model>
+```
+
+For example, use `life-sciences`, `physical-sciences`, `earth-sciences`, `mathematical-sciences`, or `engineering-sciences` as `<task-domain>`. Browse available tasks in the [benchmark repository](https://github.com/harbor-framework/terminal-bench-science/tree/main/tasks).
+
+## Validate a task
+
+Run the Oracle agent to verify a task's reference solution before evaluating an AI agent.
+
+```bash
+harbor run -p tasks/<task-domain>/<task-field>/<task-name> -a oracle
+```
+
+## Analyze results
+
+You can run the Harbor viewer if you want to inspect your experiment results.
+
+```bash
+harbor view jobs
+```
+
+## Upload results
+
+You can also upload your results to [Harbor Hub](https://hub.harborframework.com) to store for later or share with others. All uploads are private by default.
+
+```bash
+harbor upload jobs/<name> # or harbor run ... --upload
+```
+
+## Join our community
+
+Follow task coverage, open proposals, and pull requests in the [Task Dashboard](https://stevendillmann.github.io/tb-science-task-dashboard/). To contribute a workflow or get help, [join our Discord](https://discord.com/invite/2Pe5uWGcV3).
