@@ -13,7 +13,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
-import type { LeaderboardRow } from '@/lib/leaderboard';
+import { getAccessorValue, type LeaderboardRow } from '@/lib/leaderboard';
 import { cn } from '@/lib/utils';
 
 export type ParetoDatum = {
@@ -21,6 +21,7 @@ export type ParetoDatum = {
   label: ChartRowLabel;
   x: number;
   y: number;
+  accuracyStderr: number | null;
   onFrontier: boolean;
 };
 
@@ -132,11 +133,19 @@ export function buildParetoData(
       const x = xAxis.read(row);
       const y = yAxis.read(row);
       if (x == null || y == null) return null;
+      const accuracyStderr = getAccessorValue(
+        row,
+        'metrics.accuracy_stderr',
+      );
       return {
         id: row.id,
         label: chartRowLabel(row),
         x,
         y,
+        accuracyStderr:
+          typeof accuracyStderr === 'number' && !Number.isNaN(accuracyStderr)
+            ? accuracyStderr
+            : null,
       };
     })
     .filter((row): row is Omit<ParetoDatum, 'onFrontier'> => row != null);
@@ -155,6 +164,7 @@ type ParetoScatterChartProps = {
   xAxisId: ParetoAxisId;
   yAxisId: ParetoAxisId;
   className?: string;
+  id?: string;
 };
 
 type ActiveTip = {
@@ -172,6 +182,7 @@ export function ParetoScatterChart({
   xAxisId,
   yAxisId,
   className,
+  id,
 }: ParetoScatterChartProps) {
   const plotRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(MIN_WIDTH);
@@ -231,7 +242,7 @@ export function ParetoScatterChart({
     .join(' ');
 
   return (
-    <div className={className}>
+    <div id={id} className={className}>
       <div ref={plotRef} className="relative w-full overflow-hidden" style={{ height: HEIGHT }}>
       <svg
         viewBox={`0 0 ${width} ${HEIGHT}`}
@@ -331,6 +342,7 @@ export function ParetoScatterChart({
           <path
             d={frontierPath}
             fill="none"
+          stroke="#038f99"
             className="stroke-[#038f99]"
             strokeWidth={2}
           />
@@ -373,6 +385,7 @@ export function ParetoScatterChart({
                 y={cy - half}
                 width={size}
                 height={size}
+                fill={datum.onFrontier ? '#038f99' : undefined}
                 className={
                   datum.onFrontier
                     ? 'fill-[#038f99]'

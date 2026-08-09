@@ -4,6 +4,9 @@ import {
   ArrowDown01Icon,
   ArrowUp01Icon,
   ArrowUpDownIcon,
+  Copy01Icon,
+  Tick02Icon,
+  Image01Icon,
 } from '@hugeicons/core-free-icons';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { useQuery } from '@tanstack/react-query';
@@ -13,8 +16,9 @@ import type {
   OnChangeFn,
   VisibilityState,
 } from '@tanstack/react-table';
+import { toBlob } from 'html-to-image';
 import { useQueryState } from 'nuqs';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 
 import { LeaderboardSkeleton } from '@/components/leaderboard/leaderboard-skeleton';
 import {
@@ -24,6 +28,12 @@ import {
   type LeaderboardFilters,
 } from '@/components/leaderboard/leaderboard-toolbar';
 import { DataTable } from '@/components/ui/data-table';
+import { Button } from '@/components/ui/button';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import {
   TERMINAL_BENCH_LEADERBOARD,
   TERMINAL_BENCH_PACKAGE,
@@ -51,6 +61,7 @@ const SORTABLE_COLUMN_IDS = new Set([
   'total_tokens',
   'total_cost_usd',
 ]);
+const TABLE_IMAGE_ID = 'leaderboard-table-image';
 
 function alignClass(align?: LeaderboardColumn['align']) {
   switch (align) {
@@ -237,6 +248,247 @@ function orderLeaderboardColumns(
     ordered.push(column);
   }
   return ordered;
+}
+
+function escapeTsv(value: string): string {
+  return value.replace(/[\t\r\n]+/g, ' ');
+}
+
+function exportColumnHeader(column: LeaderboardColumn): string {
+  switch (column.id) {
+    case 'accuracy':
+      return 'Resolution Rate (%)';
+    case 'total_cost_usd':
+      return 'Cost (USD)';
+    case 'total_tokens':
+      return 'Tokens';
+    default:
+      return column.header;
+  }
+}
+
+function formatConfidenceInterval(row: LeaderboardRow): string {
+  const stderr = getAccessorValue(row, 'metrics.accuracy_stderr');
+  if (typeof stderr !== 'number' || Number.isNaN(stderr)) return '—';
+  return (Z_95 * stderr).toFixed(2);
+}
+
+function formatExportDate(value: unknown): string {
+  if (typeof value !== 'string') return String(value ?? '—');
+  const date = /^(\d{4}-\d{2}-\d{2})/.exec(value);
+  return date ? date[1] : value;
+}
+
+function formatExportCell(
+  row: LeaderboardRow,
+  column: LeaderboardColumn,
+): string {
+  const useRawValue = new Set([
+    'accuracy',
+    'total_cost_usd',
+    'total_tokens',
+    'release_date',
+  ]).has(column.id);
+  const accessor =
+    useRawValue || !column.display_accessor
+      ? column.accessor
+      : column.display_accessor;
+  const value = getAccessorValue(row, accessor);
+
+  if (column.id === 'release_date') return formatExportDate(value);
+
+  return formatLeaderboardCell(
+    value,
+    useRawValue && column.id !== 'release_date'
+      ? 'number'
+      : (column.display_type ?? column.type),
+  );
+}
+
+type TsvColumn = {
+  header: string;
+  value: (row: LeaderboardRow) => string;
+};
+
+function tableRowsToTsv(
+  rows: LeaderboardRow[],
+  columns: LeaderboardColumn[],
+  columnVisibility: VisibilityState,
+): string {
+  const exportColumns = orderLeaderboardColumns(columns).filter(
+    (column) =>
+      !HIDDEN_TABLE_COLUMN_IDS.has(column.id) &&
+      columnVisibility[column.id] !== false,
+  );
+  const includeRank = columnVisibility.rank !== false;
+  const tsvColumns: TsvColumn[] = [
+    ...(includeRank
+      ? [
+          {
+            header: 'Rank',
+            value: (row: LeaderboardRow) => String(row.rank ?? '—'),
+          },
+        ]
+      : []),
+  ];
+
+  for (const column of exportColumns) {
+    tsvColumns.push({
+      header: exportColumnHeader(column),
+      value: (row) => escapeTsv(formatExportCell(row, column)),
+    });
+    if (column.id === 'accuracy') {
+      tsvColumns.push({
+        header: '95% CI (± pp)',
+        value: formatConfidenceInterval,
+      });
+    }
+    if (column.id === 'model_display') {
+      tsvColumns.push({
+        header: 'Reasoning Effort',
+        value: (row) => {
+          const effort = getAccessorValue(row, 'metadata.reasoning_effort');
+          return escapeTsv(
+            typeof effort === 'string' && effort.trim() ? effort.trim() : '—',
+          );
+        },
+      });
+    }
+  }
+
+  const header = tsvColumns.map((column) => column.header);
+  const lines = rows.map((row) => {
+    return tsvColumns.map((column) => column.value(row));
+  });
+
+  return [
+    ['Terminal-Bench Science 0.1 Leaderboard'],
+    [],
+    header,
+    ...lines,
+  ]
+    .map((line) => line.join('\t'))
+    .join('\n');
+}
+
+function CopyLeaderboardActions({
+  rows,
+  columns,
+  columnVisibility,
+}: {
+  rows: LeaderboardRow[];
+  columns: LeaderboardColumn[];
+  columnVisibility: VisibilityState;
+}) {
+  const [tableCopyState, setTableCopyState] = useState<
+    'idle' | 'copied' | 'error'
+  >('idle');
+  const [imageCopyState, setImageCopyState] = useState<
+    'idle' | 'copied' | 'error'
+  >('idle');
+
+  async function copyTable() {
+    try {
+      await navigator.clipboard.writeText(
+        tableRowsToTsv(rows, columns, columnVisibility),
+      );
+      setTableCopyState('copied');
+    } catch {
+      setTableCopyState('error');
+    }
+    window.setTimeout(() => setTableCopyState('idle'), 1600);
+  }
+
+  async function copyTableImage() {
+    const table = document.getElementById(TABLE_IMAGE_ID);
+    if (
+      !table ||
+      !navigator.clipboard?.write ||
+      typeof ClipboardItem === 'undefined'
+    ) {
+      setImageCopyState('error');
+      window.setTimeout(() => setImageCopyState('idle'), 1600);
+      return;
+    }
+
+    try {
+      const image = await toBlob(table, {
+        cacheBust: true,
+        pixelRatio: 2,
+      });
+      if (!image) throw new Error('Could not create table image.');
+
+      await navigator.clipboard.write([
+        new ClipboardItem({ 'image/png': image }),
+      ]);
+      setImageCopyState('copied');
+    } catch {
+      setImageCopyState('error');
+    }
+
+    window.setTimeout(() => setImageCopyState('idle'), 1600);
+  }
+
+  return (
+    <div className="flex items-center gap-1">
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              aria-label="Copy leaderboard as TSV"
+              onClick={copyTable}
+            >
+              <HugeiconsIcon
+                icon={
+                  tableCopyState === 'copied' ? Tick02Icon : Copy01Icon
+                }
+                strokeWidth={2}
+                className="text-muted-foreground"
+              />
+            </Button>
+          }
+        />
+        <TooltipContent>
+          {tableCopyState === 'copied'
+            ? 'Copied as TSV'
+            : tableCopyState === 'error'
+              ? 'Could not copy TSV'
+              : 'Copy leaderboard as TSV'}
+        </TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              aria-label="Copy leaderboard as PNG"
+              onClick={copyTableImage}
+            >
+              <HugeiconsIcon
+                icon={
+                  imageCopyState === 'copied' ? Tick02Icon : Image01Icon
+                }
+                strokeWidth={2}
+                className="text-muted-foreground"
+              />
+            </Button>
+          }
+        />
+        <TooltipContent>
+          {imageCopyState === 'copied'
+            ? 'Copied as PNG'
+            : imageCopyState === 'error'
+              ? 'Could not copy PNG'
+              : 'Copy leaderboard as PNG'}
+        </TooltipContent>
+      </Tooltip>
+    </div>
+  );
 }
 
 function buildColumns(
@@ -440,6 +692,7 @@ export function LeaderboardTable() {
         columns={tableColumns}
         data={filteredRows}
         emptyMessage="No leaderboard rows match the current filters."
+        tableContainerId={TABLE_IMAGE_ID}
         getRowId={(row) => row.id}
         getRowHref={(row) =>
           harborLeaderboardRowUrl(
@@ -451,17 +704,24 @@ export function LeaderboardTable() {
         columnVisibility={columnVisibility}
         onColumnVisibilityChange={handleColumnVisibilityChange}
         toolbar={
-          <LeaderboardToolbar
-            columns={toolbarColumns}
-            columnOptions={columnOptions}
-            filters={filters}
-            onFiltersChange={handleFiltersChange}
-            numberBounds={facets.numberBounds}
-            dateBounds={facets.dateBounds}
-            setOptions={facets.setOptions}
-            columnVisibility={columnVisibility}
-            onColumnVisibilityChange={handleColumnVisibilityChange}
-          />
+          <div className="flex w-full min-w-0 items-center gap-1.5">
+            <CopyLeaderboardActions
+              rows={filteredRows}
+              columns={data.leaderboard.columns}
+              columnVisibility={columnVisibility}
+            />
+            <LeaderboardToolbar
+              columns={toolbarColumns}
+              columnOptions={columnOptions}
+              filters={filters}
+              onFiltersChange={handleFiltersChange}
+              numberBounds={facets.numberBounds}
+              dateBounds={facets.dateBounds}
+              setOptions={facets.setOptions}
+              columnVisibility={columnVisibility}
+              onColumnVisibilityChange={handleColumnVisibilityChange}
+            />
+          </div>
         }
         footer={
           <footer className="flex h-12 items-center justify-center border-t px-6 text-center text-sm text-muted-foreground">
