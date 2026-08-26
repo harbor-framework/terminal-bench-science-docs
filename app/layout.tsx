@@ -15,7 +15,7 @@ const googleSansCode = Google_Sans_Code({
 
 const siteUrl = 'https://terminal-bench-science.ai';
 const siteDescription =
-  'A benchmark for evaluating AI agents on research workflows across scientific domains';
+  'A benchmark for evaluating AI agents on research workflows across the life, physical, earth, mathematical, and engineering sciences.';
 
 export const metadata: Metadata = {
   title: appName,

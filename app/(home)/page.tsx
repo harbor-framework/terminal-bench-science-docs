@@ -16,7 +16,7 @@ export default function HomePage() {
             <HeroTitle />
             <p className="max-w-xl text-balance text-lg font-normal tracking-tighter text-muted-foreground">
               A benchmark for evaluating AI agents on research workflows across
-              scientific domains
+              the life, physical, earth, mathematical, and engineering sciences.
             </p>
           </div>
           <div className="flex flex-wrap items-center justify-center gap-2">
