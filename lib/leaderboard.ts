@@ -100,6 +100,42 @@ export const HARBOR_HUB_URL = 'https://hub.harborframework.com';
 export const HARBOR_HUB_FUNCTIONS_URL =
   'https://ofhuhcpkvzjlejydnvyd.supabase.co';
 
+const COST_FORMAT = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 0,
+});
+
+export function formatLeaderboardCost(value: unknown): string | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    return null;
+  }
+  return COST_FORMAT.format(value === 0 ? 0 : value);
+}
+
+/** Format labels only; keep precise costs for aggregation, sorting and charts. */
+export function formatLeaderboardCostMetrics(metrics: JsonObject): JsonObject {
+  const displayCost = formatLeaderboardCost(metrics.total_cost_usd);
+  const domains = metrics.domain_metrics;
+  return {
+    ...metrics,
+    ...(displayCost === null ? {} : { display_cost: displayCost }),
+    ...(domains && typeof domains === 'object' && !Array.isArray(domains)
+      ? {
+          domain_metrics: Object.fromEntries(
+            Object.entries(domains).map(([domain, metric]) => [
+              domain,
+              metric && typeof metric === 'object' && !Array.isArray(metric)
+                ? formatLeaderboardCostMetrics(metric as JsonObject)
+                : metric,
+            ]),
+          ),
+        }
+      : {}),
+  };
+}
+
 export const leaderboardQueryKey = (
   packageName: string,
   name: string,
@@ -158,7 +194,12 @@ export async function fetchLeaderboard(
   const leaderboardPayload = payload as LeaderboardReadResponse;
   return {
     ...leaderboardPayload,
-    rows: rankLeaderboardRowsByEfficiency(leaderboardPayload.rows),
+    rows: rankLeaderboardRowsByEfficiency(
+      leaderboardPayload.rows.map((row) => ({
+        ...row,
+        metrics: formatLeaderboardCostMetrics(row.metrics),
+      })),
+    ),
     leaderboard: {
       ...leaderboardPayload.leaderboard,
       columns: leaderboardPayload.leaderboard.columns.map((column) =>

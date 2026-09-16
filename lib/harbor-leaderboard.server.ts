@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { formatLeaderboardCost } from '@/lib/leaderboard';
 import type {
   JsonObject,
   LeaderboardDomainMetric,
@@ -345,13 +346,6 @@ function compactTokens(value: number): string {
   }).format(value);
 }
 
-function compactCost(value: number): string {
-  if (value >= 1_000) {
-    return `$${(value / 1_000).toFixed(2).replace(/\.?0+$/, '')}k`;
-  }
-  return `$${value.toFixed(2)}`;
-}
-
 function aggregateTrials(trials: TrialRecord[]): LeaderboardDomainMetric {
   const tasks = trials.length;
   const passes = trials.reduce(
@@ -394,7 +388,7 @@ function aggregateTrials(trials: TrialRecord[]): LeaderboardDomainMetric {
     total_cost_usd: totalCost,
     display_accuracy: `**${accuracy.toFixed(1)}%** +/- ${accuracyStderr.toFixed(1)}%`,
     display_total_tokens: compactTokens(totalTokens),
-    display_cost: compactCost(totalCost),
+    display_cost: formatLeaderboardCost(totalCost) ?? '—',
   };
 }
 
