@@ -1,5 +1,7 @@
 'use client';
 
+import Link from 'next/link';
+
 import {
   ArrowDown01Icon,
   ArrowUp01Icon,
@@ -36,6 +38,7 @@ import {
 } from '@/components/ui/tooltip';
 import { ViewDescriptionBar } from '@/components/view-description-bar';
 import { ViewHeader } from '@/components/view-header';
+import { confidenceBounds, confidenceLabel } from '@/lib/task-confidence';
 import {
   TERMINAL_BENCH_LEADERBOARD,
   TERMINAL_BENCH_PACKAGE,
@@ -142,8 +145,6 @@ function LeaderboardCell({
   }
 }
 
-const Z_95 = 1.96;
-
 function AccuracyBarCell({
   row,
   accentColor,
@@ -152,16 +153,13 @@ function AccuracyBarCell({
   accentColor: string;
 }) {
   const accuracy = getAccessorValue(row, 'metrics.accuracy');
-  const stderr = getAccessorValue(row, 'metrics.accuracy_stderr');
   const display = getAccessorValue(row, 'metrics.display_accuracy');
 
   const value =
     typeof accuracy === 'number' && !Number.isNaN(accuracy) ? accuracy : null;
-  const se =
-    typeof stderr === 'number' && !Number.isNaN(stderr) ? stderr : 0;
-  const half = Z_95 * se;
-  const ciUpper = value != null ? Math.min(100, value + half) : 0;
-  const ciWidth = value != null ? Math.max(0, ciUpper - value) : 0;
+  const interval = confidenceBounds(row.metrics);
+  const label = confidenceLabel(row.metrics);
+  const nTasks = row.metrics.accuracy_n_tasks;
 
   if (value == null) {
     return (
@@ -170,9 +168,10 @@ function AccuracyBarCell({
   }
 
   return (
-    <div className="flex min-w-60 items-center gap-3">
-      <div className="w-32 shrink-0 whitespace-nowrap tabular-nums">
-        <LeaderboardCell value={display ?? accuracy} type="markdown" />
+    <div className="flex min-w-72 items-center gap-3" title={`95% task-level confidence interval across ${nTasks ?? 'unknown'} tasks; not the spread of repeated runs.`}>
+      <div className="w-44 shrink-0 whitespace-nowrap tabular-nums">
+        <div className="font-semibold">{value.toFixed(1)}%</div>
+        <div className="text-xs text-muted-foreground">95% CI {label}</div>
       </div>
       <div className="relative h-3 min-w-20 flex-1 overflow-hidden rounded-none bg-muted">
         <div
@@ -182,15 +181,16 @@ function AccuracyBarCell({
             width: `${Math.min(100, Math.max(0, value))}%`,
           }}
         />
-        {ciWidth > 0 ? (
+        {interval ? (
           <div
-            className="absolute inset-y-0 rounded-none"
+            className="absolute top-1/2 h-2 -translate-y-1/2 border-x-2 border-current"
             style={{
-              backgroundColor: `color-mix(in srgb, ${accentColor} 35%, transparent)`,
-              left: `${Math.min(100, Math.max(0, value))}%`,
-              width: `${ciWidth}%`,
+              left: `${interval.lower}%`,
+              width: `${interval.upper - interval.lower}%`,
             }}
-          />
+          >
+            <div className="absolute top-1/2 w-full border-t-2 border-current" />
+          </div>
         ) : null}
       </div>
     </div>
@@ -290,12 +290,6 @@ function exportColumnHeader(column: LeaderboardColumn): string {
   }
 }
 
-function formatConfidenceInterval(row: LeaderboardRow): string {
-  const stderr = getAccessorValue(row, 'metrics.accuracy_stderr');
-  if (typeof stderr !== 'number' || Number.isNaN(stderr)) return '—';
-  return (Z_95 * stderr).toFixed(2);
-}
-
 function formatExportDate(value: unknown): string {
   if (typeof value !== 'string') return String(value ?? '—');
   const date = /^(\d{4}-\d{2}-\d{2})/.exec(value);
@@ -363,8 +357,16 @@ function tableRowsToTsv(
     });
     if (column.id === 'accuracy') {
       tsvColumns.push({
-        header: '95% CI (± pp)',
-        value: formatConfidenceInterval,
+        header: '95% CI lower (%)',
+        value: (row) => confidenceBounds(row.metrics)?.lower.toFixed(2) ?? 'unavailable',
+      });
+      tsvColumns.push({
+        header: '95% CI upper (%)',
+        value: (row) => confidenceBounds(row.metrics)?.upper.toFixed(2) ?? 'unavailable',
+      });
+      tsvColumns.push({
+        header: 'Tasks used for CI',
+        value: (row) => String(row.metrics.accuracy_n_tasks ?? '—'),
       });
     }
     if (column.id === 'model_display') {
@@ -839,7 +841,9 @@ export function LeaderboardTable({ domain }: { domain: DomainId }) {
         }
         footer={
           <ViewDescriptionBar>
-            Resolution rate ranked by agent and model performance
+            95% confidence intervals use task averages and describe uncertainty
+            across comparable tasks.{' '}
+            <Link href="/docs/evaluation-statistics" className="underline">Methodology</Link>
           </ViewDescriptionBar>
         }
       />

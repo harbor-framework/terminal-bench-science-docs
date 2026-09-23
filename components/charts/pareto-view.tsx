@@ -1,5 +1,7 @@
 'use client';
 
+import Link from 'next/link';
+
 import {
   Copy01Icon,
   Image01Icon,
@@ -70,7 +72,6 @@ import {
 
 const parseParetoXAxis = parseAsStringLiteral(PARETO_X_AXIS_IDS);
 const PARETO_IMAGE_ID = 'pareto-chart-image';
-const Z_95 = 1.96;
 const SVG_CAPTURE_PROPERTIES = [
   'color',
   'fill',
@@ -193,31 +194,30 @@ function paretoValueForExport(
   return formatLeaderboardCell(value, 'number');
 }
 
-function formatConfidenceInterval(point: ParetoDatum): string {
-  if (point.accuracyStderr == null) return '—';
-  return (Z_95 * point.accuracyStderr).toFixed(2);
-}
-
 function paretoDataToTsv(
   data: ParetoDatum[],
   xAxisId: keyof typeof PARETO_AXES,
   yAxisId: keyof typeof PARETO_AXES,
   domain: DomainId,
 ): string {
+  const hasAccuracy = xAxisId === 'accuracy' || yAxisId === 'accuracy';
   const header = [
     'Model',
     'Agent',
     paretoAxisHeader(yAxisId),
-    ...(yAxisId === 'accuracy' ? ['95% CI (± pp)'] : []),
     paretoAxisHeader(xAxisId),
+    ...(hasAccuracy ? ['95% CI lower (%)', '95% CI upper (%)'] : []),
     'Pareto Frontier',
   ];
   const rows = data.map((point) => [
     point.label.model,
     point.label.agent,
     paretoValueForExport(point.y, yAxisId),
-    ...(yAxisId === 'accuracy' ? [formatConfidenceInterval(point)] : []),
     paretoValueForExport(point.x, xAxisId),
+    ...(hasAccuracy ? [
+      point.accuracyInterval?.lower.toFixed(2) ?? 'unavailable',
+      point.accuracyInterval?.upper.toFixed(2) ?? 'unavailable',
+    ] : []),
     point.onFrontier ? 'Yes' : 'No',
   ]);
   const curveTitle = `${PARETO_AXES[yAxisId].label} vs. ${PARETO_AXES[xAxisId].label}`;
@@ -574,7 +574,9 @@ export function ParetoView({ domain }: { domain: DomainId }) {
           className="px-2 py-3"
         />
         <ViewDescriptionBar>
-          Resolution rate vs. {xMetricDescription}
+          Resolution rate vs. {xMetricDescription}. Whiskers show 95% task-level
+          confidence intervals.{' '}
+          <Link href="/docs/evaluation-statistics" className="underline">Methodology</Link>
         </ViewDescriptionBar>
       </div>
     </div>

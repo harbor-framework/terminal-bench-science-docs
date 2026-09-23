@@ -1,4 +1,5 @@
 import 'server-only';
+import { confidenceLabel, taskConfidence, withTaskConfidenceIntervals } from '@/lib/task-confidence';
 
 import type {
   JsonObject,
@@ -358,11 +359,16 @@ function aggregateTrials(trials: TrialRecord[]): LeaderboardDomainMetric {
     (total, trial) => total + (numericReward(trial.rewards) === 1 ? 1 : 0),
     0,
   );
-  const accuracy = tasks > 0 ? (passes / tasks) * 100 : 0;
-  const accuracyStderr =
-    tasks > 0
-      ? Math.sqrt((accuracy / 100) * (1 - accuracy / 100) / tasks) * 100
-      : 0;
+  const outcomes = new Map<string, LeaderboardTaskOutcome>();
+  for (const trial of trials) {
+    const key = taskSlug(trial.task_name);
+    const outcome = outcomes.get(key) ?? { solved: 0, total: 0 };
+    outcome.total += 1;
+    if (numericReward(trial.rewards) === 1) outcome.solved += 1;
+    outcomes.set(key, outcome);
+  }
+  const confidence = taskConfidence([...outcomes.values()]);
+  const accuracy = confidence.accuracy ?? 0;
   const totalTokens = trials.reduce(
     (total, trial) =>
       total +
@@ -388,11 +394,11 @@ function aggregateTrials(trials: TrialRecord[]): LeaderboardDomainMetric {
   return {
     tasks,
     passes,
+    ...confidence,
     accuracy,
-    accuracy_stderr: accuracyStderr,
     total_tokens: totalTokens,
     total_cost_usd: totalCost,
-    display_accuracy: `**${accuracy.toFixed(1)}%** +/- ${accuracyStderr.toFixed(1)}%`,
+    display_accuracy: `**${accuracy.toFixed(1)}%** (95% CI ${confidenceLabel(confidence)})`,
     display_total_tokens: compactTokens(totalTokens),
     display_cost: compactCost(totalCost),
   };
@@ -564,5 +570,5 @@ export async function readHarborLeaderboardWithDomains(
   leaderboardName: string,
 ): Promise<LeaderboardReadResponse> {
   const response = await readLeaderboard(apiKey, packageName, leaderboardName);
-  return addDerivedMetrics(apiKey, response);
+  return withTaskConfidenceIntervals(await addDerivedMetrics(apiKey, response));
 }

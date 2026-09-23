@@ -1,4 +1,5 @@
 import type { DomainId } from '@/lib/domain-context';
+import { withTaskConfidenceIntervals } from '@/lib/task-confidence';
 
 export type JsonObject = Record<string, unknown>;
 
@@ -38,7 +39,13 @@ export type LeaderboardDomainMetric = {
   tasks: number;
   passes: number;
   accuracy: number;
-  accuracy_stderr: number;
+  accuracy_stderr: number | null;
+  accuracy_ci_lower?: number | null;
+  accuracy_ci_upper?: number | null;
+  accuracy_ci_level?: number;
+  accuracy_ci_method?: string;
+  accuracy_ci_status?: string;
+  accuracy_n_tasks?: number;
   total_tokens: number;
   total_cost_usd: number;
   display_accuracy: string;
@@ -155,7 +162,7 @@ export async function fetchLeaderboard(
     throw new Error(message);
   }
 
-  const leaderboardPayload = payload as LeaderboardReadResponse;
+  const leaderboardPayload = withTaskConfidenceIntervals(payload as LeaderboardReadResponse);
   return {
     ...leaderboardPayload,
     rows: rankLeaderboardRowsByEfficiency(leaderboardPayload.rows),
@@ -201,7 +208,7 @@ function isDomainMetric(value: unknown): value is LeaderboardDomainMetric {
     typeof metric.tasks === 'number' &&
     typeof metric.passes === 'number' &&
     typeof metric.accuracy === 'number' &&
-    typeof metric.accuracy_stderr === 'number' &&
+    (typeof metric.accuracy_stderr === 'number' || metric.accuracy_stderr === null) &&
     typeof metric.total_tokens === 'number' &&
     typeof metric.total_cost_usd === 'number' &&
     typeof metric.display_accuracy === 'string' &&

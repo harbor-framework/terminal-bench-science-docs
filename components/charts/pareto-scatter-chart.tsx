@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/tooltip';
 import { getDomain, type DomainId } from '@/lib/domain-context';
 import { getAccessorValue, type LeaderboardRow } from '@/lib/leaderboard';
+import { confidenceBounds, confidenceLabel, type ConfidenceBounds } from '@/lib/task-confidence';
 import { cn } from '@/lib/utils';
 
 export type ParetoDatum = {
@@ -26,7 +27,8 @@ export type ParetoDatum = {
   releaseDate: number | null;
   x: number;
   y: number;
-  accuracyStderr: number | null;
+  accuracyInterval: ConfidenceBounds | null;
+  accuracyIntervalLabel: string;
   onFrontier: boolean;
 };
 
@@ -138,10 +140,6 @@ export function buildParetoData(
       const x = xAxis.read(row);
       const y = yAxis.read(row);
       if (x == null || y == null) return null;
-      const accuracyStderr = getAccessorValue(
-        row,
-        'metrics.accuracy_stderr',
-      );
       const reasoningEffort = getAccessorValue(
         row,
         'metadata.reasoning_effort',
@@ -161,10 +159,8 @@ export function buildParetoData(
         releaseDate,
         x,
         y,
-        accuracyStderr:
-          typeof accuracyStderr === 'number' && !Number.isNaN(accuracyStderr)
-            ? accuracyStderr
-            : null,
+        accuracyInterval: confidenceBounds(row.metrics),
+        accuracyIntervalLabel: `95% resolution CI ${confidenceLabel(row.metrics)}`,
       };
     })
     .filter((row): row is Omit<ParetoDatum, 'onFrontier'> => row != null);
@@ -196,6 +192,7 @@ type ActiveTip = {
   cost: string;
   tokens: string;
   releaseDate: string;
+  accuracyIntervalLabel: string;
   cx: number;
   cy: number;
   onFrontier: boolean;
@@ -262,8 +259,10 @@ export function ParetoScatterChart({
   const plotW = Math.max(0, width - MARGIN.left - MARGIN.right);
   const plotH = Math.max(0, HEIGHT - MARGIN.top - MARGIN.bottom);
 
-  const xs = data.map((d) => d.x);
-  const ys = data.map((d) => d.y);
+  const xs = data.flatMap((d) => xAxisId === 'accuracy' && d.accuracyInterval
+    ? [d.x, d.accuracyInterval.lower, d.accuracyInterval.upper] : [d.x]);
+  const ys = data.flatMap((d) => yAxisId === 'accuracy' && d.accuracyInterval
+    ? [d.y, d.accuracyInterval.lower, d.accuracyInterval.upper] : [d.y]);
   const xTicks = axisTicks(xAxisId, xs, 0.08);
   const yTicks = axisTicks(yAxisId, ys, 0.12);
   const xMin = xTicks[0]!;
@@ -398,6 +397,25 @@ export function ParetoScatterChart({
           const labelX = labelOnLeft ? cx - half - 6 : cx + half + 6;
           return (
             <g key={datum.id}>
+              {datum.accuracyInterval ? (
+                <g stroke={accentColor} strokeOpacity={0.55} strokeWidth={1.5} style={{ pointerEvents: 'none' }}>
+                  <title>{datum.accuracyIntervalLabel}</title>
+                  {xAxisId === 'accuracy' ? (
+                    <>
+                      <line x1={xScale(datum.accuracyInterval.lower)} x2={xScale(datum.accuracyInterval.upper)} y1={cy} y2={cy} />
+                      <line x1={xScale(datum.accuracyInterval.lower)} x2={xScale(datum.accuracyInterval.lower)} y1={cy - 3} y2={cy + 3} />
+                      <line x1={xScale(datum.accuracyInterval.upper)} x2={xScale(datum.accuracyInterval.upper)} y1={cy - 3} y2={cy + 3} />
+                    </>
+                  ) : null}
+                  {yAxisId === 'accuracy' ? (
+                    <>
+                      <line x1={cx} x2={cx} y1={yScale(datum.accuracyInterval.lower)} y2={yScale(datum.accuracyInterval.upper)} />
+                      <line x1={cx - 3} x2={cx + 3} y1={yScale(datum.accuracyInterval.lower)} y2={yScale(datum.accuracyInterval.lower)} />
+                      <line x1={cx - 3} x2={cx + 3} y1={yScale(datum.accuracyInterval.upper)} y2={yScale(datum.accuracyInterval.upper)} />
+                    </>
+                  ) : null}
+                </g>
+              ) : null}
               {/* Invisible hit target in SVG space (avoids HTML/SVG coordinate drift). */}
               <rect
                 data-export-ignore=""
@@ -424,6 +442,7 @@ export function ParetoScatterChart({
                       datum.releaseDate == null
                         ? '—'
                         : PARETO_AXES.release_date.format(datum.releaseDate),
+                    accuracyIntervalLabel: datum.accuracyIntervalLabel,
                     cx,
                     cy,
                     onFrontier: datum.onFrontier,
@@ -532,6 +551,7 @@ export function ParetoScatterChart({
                 <p className="opacity-70">{active.reasoningEffort ?? '—'}</p>
               </div>
               <div className="shrink-0 text-right tabular-nums opacity-70">
+                <p>{active.accuracyIntervalLabel}</p>
                 <p>{active.cost}</p>
                 <p>{active.tokens}</p>
                 <p>{active.releaseDate}</p>
